@@ -72,13 +72,7 @@ def test_performance_issues():
 
 
 def test_payload_insights():
-    """
-    Step 6: Test request/response size analytics.
-    Validates:
-    - average request size
-    - average response size
-    - largest payloads
-    """
+    """Step 6: Test request/response size analytics."""
     logs = [
         {"timestamp": "2025-01-15T10:00:00Z", "endpoint": "/api/users", "method": "GET",
          "response_time_ms": 120, "status_code": 200, "user_id": "user_1",
@@ -92,20 +86,58 @@ def test_payload_insights():
     ]
 
     result = analyze_api_logs(logs)
-
     size_stats = result["size_insights"]
 
-    # Check average request/response sizes
     assert size_stats["avg_request_size_bytes"] == (300 + 700 + 1500) / 3
     assert size_stats["avg_response_size_bytes"] == (600 + 900 + 2500) / 3
-
-    # Check largest request payload
     assert size_stats["largest_request"]["request_size_bytes"] == 1500
     assert size_stats["largest_request"]["endpoint"] == "/api/orders"
-
-    # Check largest response payload
     assert size_stats["largest_response"]["response_size_bytes"] == 2500
     assert size_stats["largest_response"]["endpoint"] == "/api/orders"
+
+
+def test_hourly_distribution():
+    """Step 7: Test hourly request distribution."""
+    logs = [
+        {"timestamp": "2025-01-15T10:00:00Z", "endpoint": "/api/users", "method": "GET",
+         "response_time_ms": 120, "status_code": 200, "user_id": "user_1",
+         "request_size_bytes": 300, "response_size_bytes": 600},
+        {"timestamp": "2025-01-15T10:15:00Z", "endpoint": "/api/orders", "method": "POST",
+         "response_time_ms": 500, "status_code": 200, "user_id": "user_2",
+         "request_size_bytes": 500, "response_size_bytes": 800},
+        {"timestamp": "2025-01-15T11:05:00Z", "endpoint": "/api/users", "method": "GET",
+         "response_time_ms": 150, "status_code": 200, "user_id": "user_3",
+         "request_size_bytes": 400, "response_size_bytes": 700}
+    ]
+
+    result = analyze_api_logs(logs)
+    hourly = result["hourly_distribution"]
+
+    assert hourly["10:00"] == 2
+    assert hourly["11:00"] == 1
+
+
+def test_top_users_by_requests():
+    """Step 8: Test top users by request count."""
+    logs = [
+        {"timestamp": "2025-01-15T10:00:00Z", "endpoint": "/api/users", "method": "GET",
+         "response_time_ms": 120, "status_code": 200, "user_id": "user_1",
+         "request_size_bytes": 300, "response_size_bytes": 600},
+        {"timestamp": "2025-01-15T10:05:00Z", "endpoint": "/api/users", "method": "POST",
+         "response_time_ms": 180, "status_code": 201, "user_id": "user_2",
+         "request_size_bytes": 700, "response_size_bytes": 900},
+        {"timestamp": "2025-01-15T10:10:00Z", "endpoint": "/api/orders", "method": "POST",
+         "response_time_ms": 500, "status_code": 200, "user_id": "user_1",
+         "request_size_bytes": 1500, "response_size_bytes": 2500}
+    ]
+
+    result = analyze_api_logs(logs)
+    top_users = result["top_users_by_requests"]
+
+    assert top_users[0]["user_id"] == "user_1"
+    assert top_users[0]["request_count"] == 2
+    assert top_users[1]["user_id"] == "user_2"
+    assert top_users[1]["request_count"] == 1
 
 
 if __name__ == "__main__":
@@ -117,3 +149,9 @@ if __name__ == "__main__":
 
     test_payload_insights()
     print("Step 6 tests passed!")
+
+    test_hourly_distribution()
+    print("Step 7 tests passed!")
+
+    test_top_users_by_requests()
+    print("Step 8 tests passed!")
