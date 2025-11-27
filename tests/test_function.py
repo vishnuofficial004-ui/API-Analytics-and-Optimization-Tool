@@ -1,9 +1,10 @@
-import sys 
-import os 
+import sys
+import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from function import analyze_api_logs
 
 def test_endpoint_statistics():
+    """Step 4: Test endpoint statistics calculation."""
     logs = [
         {"timestamp": "2025-01-15T10:00:00Z", "endpoint": "/api/users", "method": "GET",
          "response_time_ms": 100, "status_code": 200, "user_id": "user_1",
@@ -36,6 +37,40 @@ def test_endpoint_statistics():
     assert payments_stats["error_count"] == 1
     assert payments_stats["most_common_status"] == 500
 
+def test_performance_issues():
+    """Step 5: Test detection of slow endpoints and high error rates with correct severities."""
+    logs = [
+        {"timestamp": "2025-01-15T10:00:00Z", "endpoint": "/api/users", "method": "GET",
+         "response_time_ms": 600, "status_code": 200, "user_id": "user_1",
+         "request_size_bytes": 512, "response_size_bytes": 1024},
+        {"timestamp": "2025-01-15T10:05:00Z", "endpoint": "/api/users", "method": "GET",
+         "response_time_ms": 700, "status_code": 500, "user_id": "user_2",
+         "request_size_bytes": 512, "response_size_bytes": 1024},
+        {"timestamp": "2025-01-15T10:10:00Z", "endpoint": "/api/payments", "method": "POST",
+         "response_time_ms": 1100, "status_code": 500, "user_id": "user_1",
+         "request_size_bytes": 1024, "response_size_bytes": 512}
+    ]
+    result = analyze_api_logs(logs)
+    issues = result["performance_issues"]
+
+    # /api/users slow endpoint -> medium
+    users_slow = [i for i in issues if i.get("endpoint") == "/api/users" and i["type"] == "slow_endpoint"]
+    assert users_slow[0]["severity"] == "medium"
+
+    # /api/users high error rate -> critical (1/2 = 50%)
+    users_error = [i for i in issues if i.get("endpoint") == "/api/users" and i["type"] == "high_error_rate"]
+    assert users_error[0]["severity"] == "critical"
+
+    # /api/payments slow endpoint -> high (1100ms)
+    payments_slow = [i for i in issues if i.get("endpoint") == "/api/payments" and i["type"] == "slow_endpoint"]
+    assert payments_slow[0]["severity"] == "high"
+
+    # /api/payments high error rate -> critical (1/1 = 100%)
+    payments_error = [i for i in issues if i.get("endpoint") == "/api/payments" and i["type"] == "high_error_rate"]
+    assert payments_error[0]["severity"] == "critical"
+
 if __name__ == "__main__":
     test_endpoint_statistics()
     print("Step 4 tests passed!")
+    test_performance_issues()
+    print("Step 5 tests passed!")
