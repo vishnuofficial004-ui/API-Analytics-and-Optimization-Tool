@@ -25,7 +25,6 @@ def is_valid_log(log: Dict[str, Any]) -> bool:
     except Exception:
         return False
 
-    # Validate numeric values
     numeric_fields = ["response_time_ms", "request_size_bytes", "response_size_bytes"]
     for field in numeric_fields:
         if not isinstance(log[field], (int, float)) or log[field] < 0:
@@ -34,7 +33,7 @@ def is_valid_log(log: Dict[str, Any]) -> bool:
     return True
 
 
-# ----------- Severity Helper Functions -----------
+# Severity Helper Functions
 
 def get_severity_response_time(avg_ms: float) -> str:
     if avg_ms > 2000:
@@ -56,12 +55,8 @@ def get_severity_error_rate(rate: float) -> str:
     return ""
 
 
-# -------------- Main Analyzer Function -----------------
-
 def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Analyze API logs including summary, endpoint stats, payload analytics, and performance issues."""
-
-    # Handle empty input
+    """Analyze API logs including summary, endpoint stats, payload analytics, hourly distribution, and top users."""
     if not logs:
         return {
             "summary": {},
@@ -86,15 +81,8 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "size_insights": {}
         }
 
-    # -------------------------------------------------
-    # SUMMARY
-    # -------------------------------------------------
     total_requests = len(valid_logs)
-
-    timestamps = [
-        datetime.fromisoformat(log["timestamp"].replace("Z", "+00:00"))
-        for log in valid_logs
-    ]
+    timestamps = [datetime.fromisoformat(log["timestamp"].replace("Z", "+00:00")) for log in valid_logs]
     time_range = {
         "start": min(timestamps).isoformat() + "Z",
         "end": max(timestamps).isoformat() + "Z"
@@ -111,9 +99,7 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
         "error_rate_percentage": error_rate_percentage
     }
 
-    # -------------------------------------------------
-    # ENDPOINT STATISTICS + PERFORMANCE ISSUES
-    # -------------------------------------------------
+    # ENDPOINT STATISTICS and PERFORMANCE ISSUES
     endpoints = defaultdict(list)
     for log in valid_logs:
         endpoints[log["endpoint"]].append(log)
@@ -139,7 +125,7 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "most_common_status": most_common_status
         })
 
-        # ---- Performance Issues for Response Time ----
+        # Performance Issues
         severity_rt = get_severity_response_time(avg_response)
         if severity_rt:
             performance_issues.append({
@@ -150,7 +136,6 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "severity": severity_rt
             })
 
-        # ---- Performance Issues for Error Rate ----
         error_rate_endpoint = (errors / request_count) * 100
         severity_err = get_severity_error_rate(error_rate_endpoint)
         if severity_err:
@@ -161,25 +146,30 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "severity": severity_err
             })
 
-    # -------------------------------------------------
     # STEP 6 — PAYLOAD SIZE ANALYTICS
-    # -------------------------------------------------
     size_insights = {
-        "avg_request_size_bytes": sum(log["request_size_bytes"] for log in valid_logs) / len(valid_logs),
-        "avg_response_size_bytes": sum(log["response_size_bytes"] for log in valid_logs) / len(valid_logs),
+        "avg_request_size_bytes": sum(log["request_size_bytes"] for log in valid_logs) / total_requests,
+        "avg_response_size_bytes": sum(log["response_size_bytes"] for log in valid_logs) / total_requests,
         "largest_request": max(valid_logs, key=lambda x: x["request_size_bytes"]),
         "largest_response": max(valid_logs, key=lambda x: x["response_size_bytes"])
     }
 
-    # -------------------------------------------------
-    # FINAL RETURN STRUCTURE
-    # -------------------------------------------------
+    # STEP 7 — HOURLY DISTRIBUTION
+    hourly_distribution = defaultdict(int)
+    for ts in timestamps:
+        hour_key = ts.strftime("%H:00")
+        hourly_distribution[hour_key] += 1
+
+    # STEP 8 — TOP USERS BY REQUESTS
+    user_counter = Counter(log["user_id"] for log in valid_logs)
+    top_users = [{"user_id": uid, "request_count": count} for uid, count in user_counter.most_common(5)]
+
     return {
         "summary": summary,
         "endpoint_stats": endpoint_stats,
         "performance_issues": performance_issues,
         "size_insights": size_insights,
-        "recommendations": [],
-        "hourly_distribution": {},
-        "top_users_by_requests": []
+        "hourly_distribution": dict(hourly_distribution),
+        "top_users_by_requests": top_users,
+        "recommendations": []
     }
