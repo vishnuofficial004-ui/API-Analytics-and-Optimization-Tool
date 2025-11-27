@@ -22,7 +22,7 @@ def test_endpoint_statistics():
     # /api/users stats
     users_stats = endpoints["/api/users"]
     assert users_stats["request_count"] == 2
-    assert users_stats["avg_response_time_ms"] == 150  # (100+200)/2
+    assert users_stats["avg_response_time_ms"] == 150
     assert users_stats["slowest_request_ms"] == 200
     assert users_stats["fastest_request_ms"] == 100
     assert users_stats["error_count"] == 1
@@ -36,6 +36,7 @@ def test_endpoint_statistics():
     assert payments_stats["fastest_request_ms"] == 500
     assert payments_stats["error_count"] == 1
     assert payments_stats["most_common_status"] == 500
+
 
 def test_performance_issues():
     """Step 5: Test detection of slow endpoints and high error rates with correct severities."""
@@ -69,8 +70,50 @@ def test_performance_issues():
     payments_error = [i for i in issues if i.get("endpoint") == "/api/payments" and i["type"] == "high_error_rate"]
     assert payments_error[0]["severity"] == "critical"
 
+
+def test_payload_insights():
+    """
+    Step 6: Test request/response size analytics.
+    Validates:
+    - average request size
+    - average response size
+    - largest payloads
+    """
+    logs = [
+        {"timestamp": "2025-01-15T10:00:00Z", "endpoint": "/api/users", "method": "GET",
+         "response_time_ms": 120, "status_code": 200, "user_id": "user_1",
+         "request_size_bytes": 300, "response_size_bytes": 600},
+        {"timestamp": "2025-01-15T10:05:00Z", "endpoint": "/api/users", "method": "POST",
+         "response_time_ms": 180, "status_code": 201, "user_id": "user_2",
+         "request_size_bytes": 700, "response_size_bytes": 900},
+        {"timestamp": "2025-01-15T10:10:00Z", "endpoint": "/api/orders", "method": "POST",
+         "response_time_ms": 500, "status_code": 200, "user_id": "user_3",
+         "request_size_bytes": 1500, "response_size_bytes": 2500}
+    ]
+
+    result = analyze_api_logs(logs)
+
+    size_stats = result["size_insights"]
+
+    # Check average request/response sizes
+    assert size_stats["avg_request_size_bytes"] == (300 + 700 + 1500) / 3
+    assert size_stats["avg_response_size_bytes"] == (600 + 900 + 2500) / 3
+
+    # Check largest request payload
+    assert size_stats["largest_request"]["request_size_bytes"] == 1500
+    assert size_stats["largest_request"]["endpoint"] == "/api/orders"
+
+    # Check largest response payload
+    assert size_stats["largest_response"]["response_size_bytes"] == 2500
+    assert size_stats["largest_response"]["endpoint"] == "/api/orders"
+
+
 if __name__ == "__main__":
     test_endpoint_statistics()
     print("Step 4 tests passed!")
+
     test_performance_issues()
     print("Step 5 tests passed!")
+
+    test_payload_insights()
+    print("Step 6 tests passed!")
