@@ -18,17 +18,24 @@ def is_valid_log(log: Dict[str, Any]) -> bool:
     for field in REQUIRED_FIELDS:
         if field not in log:
             return False
+
+    # Validate timestamp
     try:
         datetime.fromisoformat(log["timestamp"].replace("Z", "+00:00"))
     except Exception:
         return False
+
+    # Validate numeric values
     numeric_fields = ["response_time_ms", "request_size_bytes", "response_size_bytes"]
     for field in numeric_fields:
         if not isinstance(log[field], (int, float)) or log[field] < 0:
             return False
+
     return True
 
-# --- Severity functions ---
+
+# ----------- Severity Helper Functions -----------
+
 def get_severity_response_time(avg_ms: float) -> str:
     if avg_ms > 2000:
         return "critical"
@@ -37,6 +44,7 @@ def get_severity_response_time(avg_ms: float) -> str:
     elif avg_ms > 500:
         return "medium"
     return ""
+
 
 def get_severity_error_rate(rate: float) -> str:
     if rate > 15:
@@ -47,8 +55,13 @@ def get_severity_error_rate(rate: float) -> str:
         return "medium"
     return ""
 
+
+# -------------- Main Analyzer Function -----------------
+
 def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Analyze API logs including summary, endpoint stats, and performance issues."""
+    """Analyze API logs including summary, endpoint stats, payload analytics, and performance issues."""
+
+    # Handle empty input
     if not logs:
         return {
             "summary": {},
@@ -56,7 +69,8 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "performance_issues": [],
             "recommendations": [],
             "hourly_distribution": {},
-            "top_users_by_requests": []
+            "top_users_by_requests": [],
+            "size_insights": {}
         }
 
     # Filter invalid logs
@@ -68,13 +82,24 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "performance_issues": [],
             "recommendations": [],
             "hourly_distribution": {},
-            "top_users_by_requests": []
+            "top_users_by_requests": [],
+            "size_insights": {}
         }
 
-    # --- Summary ---
+    # -------------------------------------------------
+    # SUMMARY
+    # -------------------------------------------------
     total_requests = len(valid_logs)
-    timestamps = [datetime.fromisoformat(log["timestamp"].replace("Z", "+00:00")) for log in valid_logs]
-    time_range = {"start": min(timestamps).isoformat() + "Z", "end": max(timestamps).isoformat() + "Z"}
+
+    timestamps = [
+        datetime.fromisoformat(log["timestamp"].replace("Z", "+00:00"))
+        for log in valid_logs
+    ]
+    time_range = {
+        "start": min(timestamps).isoformat() + "Z",
+        "end": max(timestamps).isoformat() + "Z"
+    }
+
     avg_response_time = sum(log["response_time_ms"] for log in valid_logs) / total_requests
     error_count = sum(1 for log in valid_logs if log["status_code"] >= 400)
     error_rate_percentage = round((error_count / total_requests) * 100, 2)
@@ -86,7 +111,9 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
         "error_rate_percentage": error_rate_percentage
     }
 
-    # --- Endpoint Statistics & Performance Issues ---
+    # -------------------------------------------------
+    # ENDPOINT STATISTICS + PERFORMANCE ISSUES
+    # -------------------------------------------------
     endpoints = defaultdict(list)
     for log in valid_logs:
         endpoints[log["endpoint"]].append(log)
@@ -112,7 +139,7 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "most_common_status": most_common_status
         })
 
-        # --- Performance Issues ---
+        # ---- Performance Issues for Response Time ----
         severity_rt = get_severity_response_time(avg_response)
         if severity_rt:
             performance_issues.append({
@@ -123,6 +150,7 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "severity": severity_rt
             })
 
+        # ---- Performance Issues for Error Rate ----
         error_rate_endpoint = (errors / request_count) * 100
         severity_err = get_severity_error_rate(error_rate_endpoint)
         if severity_err:
@@ -133,10 +161,24 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "severity": severity_err
             })
 
+    # -------------------------------------------------
+    # STEP 6 — PAYLOAD SIZE ANALYTICS
+    # -------------------------------------------------
+    size_insights = {
+        "avg_request_size_bytes": sum(log["request_size_bytes"] for log in valid_logs) / len(valid_logs),
+        "avg_response_size_bytes": sum(log["response_size_bytes"] for log in valid_logs) / len(valid_logs),
+        "largest_request": max(valid_logs, key=lambda x: x["request_size_bytes"]),
+        "largest_response": max(valid_logs, key=lambda x: x["response_size_bytes"])
+    }
+
+    # -------------------------------------------------
+    # FINAL RETURN STRUCTURE
+    # -------------------------------------------------
     return {
         "summary": summary,
         "endpoint_stats": endpoint_stats,
         "performance_issues": performance_issues,
+        "size_insights": size_insights,
         "recommendations": [],
         "hourly_distribution": {},
         "top_users_by_requests": []
