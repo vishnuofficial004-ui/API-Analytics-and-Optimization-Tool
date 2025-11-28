@@ -69,9 +69,8 @@ print(result)
 
 ****Running Tests****
 
-pytest tests/
+Open the project directory
 
-cmd
 pytest -v --maxfail=1 --tb=short
 
 Covers core logic, edge cases, performance checks, and advanced features.
