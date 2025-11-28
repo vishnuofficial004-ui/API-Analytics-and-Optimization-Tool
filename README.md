@@ -71,6 +71,9 @@ print(result)
 
 pytest tests/
 
+cmd
+pytest -v --maxfail=1 --tb=short
+
 Covers core logic, edge cases, performance checks, and advanced features.
 
 Minimum coverage expected: 80%.
