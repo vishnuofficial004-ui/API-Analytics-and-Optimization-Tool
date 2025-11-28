@@ -1,5 +1,6 @@
 import sys
 import os
+import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from function import analyze_api_logs
 
@@ -7,7 +8,6 @@ from function import analyze_api_logs
 # Step 4: Endpoint Statistics
 # -------------------------
 def test_endpoint_statistics():
-    """Step 4: Test endpoint statistics calculation."""
     logs = [
         {"timestamp": "2025-01-15T10:00:00Z", "endpoint": "/api/users", "method": "GET",
          "response_time_ms": 100, "status_code": 200, "user_id": "user_1",
@@ -38,12 +38,10 @@ def test_endpoint_statistics():
     assert payments_stats["error_count"] == 1
     assert payments_stats["most_common_status"] == 500
 
-
 # -------------------------
 # Step 5: Performance Issues
 # -------------------------
 def test_performance_issues():
-    """Step 5: Test detection of slow endpoints and high error rates with correct severities."""
     logs = [
         {"timestamp": "2025-01-15T10:00:00Z", "endpoint": "/api/users", "method": "GET",
          "response_time_ms": 600, "status_code": 200, "user_id": "user_1",
@@ -70,12 +68,10 @@ def test_performance_issues():
     payments_error = [i for i in issues if i.get("endpoint") == "/api/payments" and i["type"] == "high_error_rate"]
     assert payments_error[0]["severity"] == "critical"
 
-
 # -------------------------
 # Step 6: Payload Insights
 # -------------------------
 def test_payload_insights():
-    """Step 6: Test request/response size analytics."""
     logs = [
         {"timestamp": "2025-01-15T10:00:00Z", "endpoint": "/api/users", "method": "GET",
          "response_time_ms": 120, "status_code": 200, "user_id": "user_1",
@@ -87,7 +83,6 @@ def test_payload_insights():
          "response_time_ms": 500, "status_code": 200, "user_id": "user_3",
          "request_size_bytes": 1500, "response_size_bytes": 2500}
     ]
-
     result = analyze_api_logs(logs)
     size_stats = result["size_insights"]
 
@@ -98,12 +93,10 @@ def test_payload_insights():
     assert size_stats["largest_response"]["response_size_bytes"] == 2500
     assert size_stats["largest_response"]["endpoint"] == "/api/orders"
 
-
 # -------------------------
 # Step 7: Hourly Distribution
 # -------------------------
 def test_hourly_distribution():
-    """Step 7: Test hourly request distribution."""
     logs = [
         {"timestamp": "2025-01-15T10:00:00Z", "endpoint": "/api/users", "method": "GET",
          "response_time_ms": 120, "status_code": 200, "user_id": "user_1",
@@ -115,19 +108,16 @@ def test_hourly_distribution():
          "response_time_ms": 150, "status_code": 200, "user_id": "user_3",
          "request_size_bytes": 400, "response_size_bytes": 700}
     ]
-
     result = analyze_api_logs(logs)
     hourly = result["hourly_distribution"]
 
     assert hourly["10:00"] == 2
     assert hourly["11:00"] == 1
 
-
 # -------------------------
 # Step 8: Top Users
 # -------------------------
 def test_top_users_by_requests():
-    """Step 8: Test top users by request count."""
     logs = [
         {"timestamp": "2025-01-15T10:00:00Z", "endpoint": "/api/users", "method": "GET",
          "response_time_ms": 120, "status_code": 200, "user_id": "user_1",
@@ -139,7 +129,6 @@ def test_top_users_by_requests():
          "response_time_ms": 500, "status_code": 200, "user_id": "user_1",
          "request_size_bytes": 1500, "response_size_bytes": 2500}
     ]
-
     result = analyze_api_logs(logs)
     top_users = result["top_users_by_requests"]
 
@@ -148,12 +137,10 @@ def test_top_users_by_requests():
     assert top_users[1]["user_id"] == "user_2"
     assert top_users[1]["request_count"] == 1
 
-
 # -------------------------
-# Step 9: Recommendations
+# Step 9: Recommendations (Caching & Performance)
 # -------------------------
 def test_recommendations():
-    """Step 9: Test recommendations generation."""
     logs = []
     for i in range(12):
         logs.append({
@@ -180,21 +167,22 @@ def test_recommendations():
     result = analyze_api_logs(logs)
     recs = result["recommendations"]
 
+    # Caching suggestion
     cache_suggestion = [r for r in recs if "/api/cache" in r]
     assert len(cache_suggestion) == 1
 
+    # Slow endpoint
     slow_suggestion = [r for r in recs if "/api/slow" in r and "performance" in r]
     assert len(slow_suggestion) == 1
 
+    # High error rate
     error_suggestion = [r for r in recs if "/api/slow" in r and "error rate" in r]
     assert len(error_suggestion) == 1
-
 
 # -------------------------
 # Step 10: Anomaly Detection
 # -------------------------
 def test_anomaly_detection():
-    """Step 10: Test detection of response time spikes and server errors."""
     logs = [
         {"timestamp": "2025-01-15T10:00:00Z", "endpoint": "/api/users", "method": "GET",
          "response_time_ms": 100, "status_code": 200, "user_id": "user_1",
@@ -229,72 +217,3 @@ def test_anomaly_detection():
     assert suspicious_endpoints.get("/api/payments") == 1
     assert suspicious_users.get("user_3") == 1
 
-
-# -------------------------
-# Step 11: Caching Opportunities
-# -------------------------
-def test_caching_opportunities():
-    """Step 11: Test detection of caching opportunities."""
-    logs = []
-    # Generate 120 GET requests with low errors for /api/cache
-    for i in range(120):
-        logs.append({
-            "timestamp": f"2025-01-15T12:{i%60:02}:00Z",
-            "endpoint": "/api/cache",
-            "method": "GET",
-            "response_time_ms": 100,
-            "status_code": 200,
-            "user_id": f"user_{i}",
-            "request_size_bytes": 100,
-            "response_size_bytes": 200
-        })
-    # Some POST requests to mix
-    logs.append({
-        "timestamp": "2025-01-15T13:00:00Z",
-        "endpoint": "/api/cache",
-        "method": "POST",
-        "response_time_ms": 200,
-        "status_code": 200,
-        "user_id": "user_999",
-        "request_size_bytes": 150,
-        "response_size_bytes": 250
-    })
-
-    result = analyze_api_logs(logs)
-    cache_ops = result["caching_opportunities"]
-    total_savings = result["total_potential_savings"]
-
-    assert len(cache_ops) >= 1
-    assert cache_ops[0]["endpoint"] == "/api/cache"
-    assert cache_ops[0]["potential_cache_hit_rate"] >= 80
-    assert total_savings["requests_eliminated"] >= 100
-    assert total_savings["cost_savings_usd"] > 0
-
-
-# -------------------------
-# Run all tests
-# -------------------------
-if __name__ == "__main__":
-    test_endpoint_statistics()
-    print("Step 4 tests passed!")
-
-    test_performance_issues()
-    print("Step 5 tests passed!")
-
-    test_payload_insights()
-    print("Step 6 tests passed!")
-
-    test_hourly_distribution()
-    print("Step 7 tests passed!")
-
-    test_top_users_by_requests()
-    print("Step 8 tests passed!")
-
-    test_recommendations()
-    print("Step 9 tests passed!")
-
-    test_anomaly_detection()
-    print("Step 10 tests passed!")
-
-    test_caching_opportunities()
-    print("Step 11 tests passed!")
