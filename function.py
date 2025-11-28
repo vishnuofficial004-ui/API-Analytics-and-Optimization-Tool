@@ -1,53 +1,39 @@
 from collections import defaultdict, Counter
-from datetime import datetime
+from datetime import timedelta
 from typing import List, Dict, Any
 
-REQUIRED_FIELDS = [
-    "timestamp",
-    "endpoint",
-    "method",
-    "response_time_ms",
-    "status_code",
-    "user_id",
-    "request_size_bytes",
-    "response_size_bytes"
-]
+from config import (
+    RESPONSE_SPIKE_MULTIPLIER,
+    REQUEST_SPIKE_WINDOW_MINUTES,
+    REQUEST_SPIKE_RATE_MULTIPLIER,
+    ERROR_CLUSTER_WINDOW_MINUTES,
+    ERROR_CLUSTER_THRESHOLD,
+    SUSPICIOUS_TRAFFIC_THRESHOLD,
+    CACHE_MIN_REQUESTS,
+    CACHE_MIN_GET_RATIO,
+    CACHE_MAX_ERROR_RATE,
+    CACHE_HIT_RATE_ASSUMPTION,
+    CACHE_COST_SAVING_PER_REQUEST,
+    CACHE_RECOMMENDED_TTL_MINUTES,
+    SLOW_ENDPOINT_THRESHOLD_MS,
+)
+from utils import (
+    parse_iso_timestamp,
+    is_valid_log,
+    classify_response_time,
+    classify_error_rate,
+    safe_divide,
+    window_logs_by_minutes,
+    group_by_endpoint,
+)
 
-def is_valid_log(log: Dict[str, Any]) -> bool:
-    """Validate a single log entry."""
-    for field in REQUIRED_FIELDS:
-        if field not in log:
-            return False
-    try:
-        datetime.fromisoformat(log["timestamp"].replace("Z", "+00:00"))
-    except Exception:
-        return False
-    numeric_fields = ["response_time_ms", "request_size_bytes", "response_size_bytes"]
-    for field in numeric_fields:
-        if not isinstance(log[field], (int, float)) or log[field] < 0:
-            return False
-    return True
 
-def get_severity_response_time(avg_ms: float) -> str:
-    if avg_ms > 2000:
-        return "critical"
-    elif avg_ms > 1000:
-        return "high"
-    elif avg_ms > 500:
-        return "medium"
-    return ""
+def _iso_z(dt):
+    """Return ISO formatted UTC string ending with Z."""
+    return dt.isoformat().replace("+00:00", "Z")
 
-def get_severity_error_rate(rate: float) -> str:
-    if rate > 15:
-        return "critical"
-    elif rate > 10:
-        return "high"
-    elif rate > 5:
-        return "medium"
-    return ""
 
 def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Analyze API logs with full statistics, anomaly detection, and caching opportunities."""
     if not logs:
         return {
             "summary": {},
@@ -60,44 +46,55 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "anomalies": {
                 "response_time_spikes": [],
                 "server_errors": [],
+                "request_spikes": [],
+                "error_clusters": [],
                 "suspicious_endpoints": {},
                 "suspicious_users": {}
             },
             "caching_opportunities": [],
             "total_potential_savings": {}
         }
+    
+    valid_logs = []
+    for raw in logs:
+        if not is_valid_log(raw):
+            continue
+        # attach parsed timestamp to avoid repeated parsing
+        ts = parse_iso_timestamp(raw["timestamp"])
+        if ts is None:
+            continue
+        entry = dict(raw)
+        entry["_ts"] = ts
+        valid_logs.append(entry)
 
-    valid_logs = [log for log in logs if is_valid_log(log)]
     if not valid_logs:
         return analyze_api_logs([])
 
     total_requests = len(valid_logs)
-    timestamps = [datetime.fromisoformat(log["timestamp"].replace("Z", "+00:00")) for log in valid_logs]
+    timestamps = [l["_ts"] for l in valid_logs]
 
-    avg_response_time = sum(log["response_time_ms"] for log in valid_logs) / total_requests
-    error_count = sum(1 for log in valid_logs if log["status_code"] >= 400)
+    avg_response_time = sum(l["response_time_ms"] for l in valid_logs) / total_requests
+    error_count = sum(1 for l in valid_logs if l["status_code"] >= 400)
     summary = {
         "total_requests": total_requests,
         "time_range": {
-            "start": min(timestamps).isoformat() + "Z",
-            "end": max(timestamps).isoformat() + "Z"
+            "start": _iso_z(min(timestamps)),
+            "end": _iso_z(max(timestamps))
         },
         "avg_response_time_ms": round(avg_response_time, 2),
-        "error_rate_percentage": round((error_count / total_requests) * 100, 2)
+        "error_rate_percentage": round(safe_divide(error_count, total_requests) * 100, 2)
     }
 
-    # Endpoint stats 
-
-    endpoints = defaultdict(list)
-    for log in valid_logs:
-        endpoints[log["endpoint"]].append(log)
-
+    #Endpoint grouping
+    endpoints = group_by_endpoint(valid_logs)  # endpoint -> list(logs)
     endpoint_stats = []
     performance_issues = []
+    endpoint_avg_resp = {}
 
     for endpoint, logs_list in endpoints.items():
         request_count = len(logs_list)
         avg_resp = sum(l["response_time_ms"] for l in logs_list) / request_count
+        endpoint_avg_resp[endpoint] = avg_resp
         slowest = max(l["response_time_ms"] for l in logs_list)
         fastest = min(l["response_time_ms"] for l in logs_list)
         errors = sum(1 for l in logs_list if l["status_code"] >= 400)
@@ -113,98 +110,153 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
             "most_common_status": most_common_status
         })
 
-        sev_rt = get_severity_response_time(avg_resp)
+        # Performance issues (response time and error rate)
+        sev_rt = classify_response_time(avg_resp)
         if sev_rt:
             performance_issues.append({
                 "type": "slow_endpoint",
                 "endpoint": endpoint,
                 "avg_response_time_ms": round(avg_resp, 2),
-                "threshold_ms": 500,
+                "threshold_ms": SLOW_ENDPOINT_THRESHOLD_MS,
                 "severity": sev_rt
             })
-
-        err_rate = (errors / request_count) * 100
-        sev_err = get_severity_error_rate(err_rate)
+        err_rate_pct = safe_divide(errors, request_count) * 100
+        sev_err = classify_error_rate(err_rate_pct)
         if sev_err:
             performance_issues.append({
                 "type": "high_error_rate",
                 "endpoint": endpoint,
-                "error_rate_percentage": round(err_rate, 2),
+                "error_rate_percentage": round(err_rate_pct, 2),
                 "severity": sev_err
             })
 
+    # --- Size insights ---
     size_insights = {
-        "avg_request_size_bytes": sum(l["request_size_bytes"] for l in valid_logs) / total_requests,
-        "avg_response_size_bytes": sum(l["response_size_bytes"] for l in valid_logs) / total_requests,
+        "avg_request_size_bytes": round(sum(l["request_size_bytes"] for l in valid_logs) / total_requests, 2),
+        "avg_response_size_bytes": round(sum(l["response_size_bytes"] for l in valid_logs) / total_requests, 2),
         "largest_request": max(valid_logs, key=lambda x: x["request_size_bytes"]),
         "largest_response": max(valid_logs, key=lambda x: x["response_size_bytes"])
     }
 
+    # --- Hourly distribution ---
     hourly_distribution = defaultdict(int)
     for ts in timestamps:
         hourly_distribution[ts.strftime("%H:00")] += 1
 
+    # --- Top users ---
     user_counter = Counter(l["user_id"] for l in valid_logs)
     top_users = [{"user_id": u, "request_count": c} for u, c in user_counter.most_common(5)]
 
+    # --- Recommendations (simple heuristics) ---
     recommendations = []
     for endpoint, logs_list in endpoints.items():
         req_count = len(logs_list)
         get_count = sum(1 for l in logs_list if l["method"] == "GET")
         errors = sum(1 for l in logs_list if l["status_code"] >= 400)
-        err_rate = errors / req_count * 100
+        err_rate_pct = safe_divide(errors, req_count) * 100
         avg_resp = sum(l["response_time_ms"] for l in logs_list) / req_count
 
-        if req_count > 10 and get_count / req_count > 0.8 and err_rate < 2:
+        if req_count >= CACHE_MIN_REQUESTS and (get_count / req_count) >= CACHE_MIN_GET_RATIO and err_rate_pct < CACHE_MAX_ERROR_RATE:
             recommendations.append(f"Consider caching for {endpoint} ({req_count} requests, high GET traffic, low error rate)")
-        if avg_resp > 500:
-            recommendations.append(f"Investigate {endpoint} performance (avg {int(avg_resp)}ms exceeds 500ms threshold)")
-        if err_rate > 5:
-            recommendations.append(f"Alert: {endpoint} has {round(err_rate,2)}% error rate")
-    # Anomaly Detection
+        if avg_resp > SLOW_ENDPOINT_THRESHOLD_MS:
+            recommendations.append(f"Investigate {endpoint} performance (avg {int(avg_resp)}ms exceeds {SLOW_ENDPOINT_THRESHOLD_MS}ms threshold)")
+        if err_rate_pct > 5:
+            recommendations.append(f"Alert: {endpoint} has {round(err_rate_pct,2)}% error rate")
+
+    # -------------------
+    # Enhanced Anomaly Detection
+    # -------------------
     anomalies = {
         "response_time_spikes": [],
         "server_errors": [],
+        "request_spikes": [],
+        "error_clusters": [],
         "suspicious_endpoints": {},
         "suspicious_users": {}
     }
 
-    for log in valid_logs:
-        if log["response_time_ms"] > 1000:  # spike threshold
-            anomalies["response_time_spikes"].append(log)
-        if log["status_code"] >= 500:
-            anomalies["server_errors"].append(log)
+    # 1) Response time spikes & server errors
+    for l in valid_logs:
+        ep = l["endpoint"]
+        baseline = endpoint_avg_resp.get(ep) or 0
+        if baseline and l["response_time_ms"] > RESPONSE_SPIKE_MULTIPLIER * baseline:
+            anomalies["response_time_spikes"].append(l)
+        if l["status_code"] >= 500:
+            anomalies["server_errors"].append(l)
 
-    endpoint_errors = Counter(l["endpoint"] for l in valid_logs if l["status_code"] >= 500)
-    user_errors = Counter(l["user_id"] for l in valid_logs if l["status_code"] >= 500)
-    anomalies["suspicious_endpoints"] = {k: v for k, v in endpoint_errors.items() if v > 0}
-    anomalies["suspicious_users"] = {k: v for k, v in user_errors.items() if v > 0}
+    # 2) Request spikes per endpoint in sliding windows
+    for endpoint, times in ((ep, [entry["_ts"] for entry in endpoints[ep]]) for ep in endpoints):
+        times.sort()
+        # compute an average rate per minute across observed span (safe)
+        span_minutes = max(1.0, (times[-1] - times[0]).total_seconds() / 60.0)
+        avg_rate_per_window = safe_divide(len(times), span_minutes) * REQUEST_SPIKE_WINDOW_MINUTES  # expected per window
+        # sliding windows
+        windows = window_logs_by_minutes(times, REQUEST_SPIKE_WINDOW_MINUTES)
+        for start, count in windows:
+            if count > REQUEST_SPIKE_RATE_MULTIPLIER * avg_rate_per_window:
+                anomalies["request_spikes"].append({
+                    "endpoint": endpoint,
+                    "timestamp": _iso_z(start),
+                    "actual_rate": count,
+                    "normal_rate": round(avg_rate_per_window, 2),
+                    "severity": "high"
+                })
+                break
+
+    # 3) Error clusters (> threshold within window)
+    endpoint_error_times = {}
+    for l in valid_logs:
+        if l["status_code"] >= 400:
+            endpoint_error_times.setdefault(l["endpoint"], []).append(l["_ts"])
+
+    for endpoint, err_times in endpoint_error_times.items():
+        err_times.sort()
+        windows = window_logs_by_minutes(err_times, ERROR_CLUSTER_WINDOW_MINUTES)
+        for start, count in windows:
+            if count > ERROR_CLUSTER_THRESHOLD:
+                anomalies["error_clusters"].append({
+                    "endpoint": endpoint,
+                    "time_window": f"{start.strftime('%H:%M')}-{(start + timedelta(minutes=ERROR_CLUSTER_WINDOW_MINUTES)).strftime('%H:%M')}",
+                    "error_count": count,
+                    "severity": "critical"
+                })
+                break
+
+    # 4) Suspicious traffic (single user or single endpoint > threshold of total)
+    for user, cnt in user_counter.items():
+        if safe_divide(cnt, total_requests) > SUSPICIOUS_TRAFFIC_THRESHOLD:
+            anomalies["suspicious_users"][user] = cnt
+    for endpoint, logs_list in endpoints.items():
+        if safe_divide(len(logs_list), total_requests) > SUSPICIOUS_TRAFFIC_THRESHOLD:
+            anomalies["suspicious_endpoints"][endpoint] = len(logs_list)
 
     # Caching Opportunity Analysis
     caching_opportunities = []
     total_requests_saved = 0
-    total_cost_savings = 0
+    total_cost_savings = 0.0
     total_perf_improvement = 0
 
     for endpoint, logs_list in endpoints.items():
         req_count = len(logs_list)
-        if req_count < 100:
-            continue 
+        if req_count < CACHE_MIN_REQUESTS:
+            continue
         get_count = sum(1 for l in logs_list if l["method"] == "GET")
         errors = sum(1 for l in logs_list if l["status_code"] >= 400)
-        err_rate = errors / req_count * 100
+        err_rate_pct = safe_divide(errors, req_count) * 100
+        get_ratio = safe_divide(get_count, req_count)
 
-        if get_count / req_count > 0.8 and err_rate < 2:
-            potential_requests_saved = int(req_count * 0.9)  # assume 90% cacheable
-            estimated_cost_savings_usd = round(potential_requests_saved * 0.001, 2)
-            performance_improvement_ms = int(sum(l["response_time_ms"] for l in logs_list) / req_count * 0.9)
+        if get_ratio >= CACHE_MIN_GET_RATIO and err_rate_pct <= CACHE_MAX_ERROR_RATE:
+            potential_requests_saved = int(req_count * CACHE_HIT_RATE_ASSUMPTION)
+            estimated_cost_savings_usd = round(potential_requests_saved * CACHE_COST_SAVING_PER_REQUEST, 2)
+            avg_resp = sum(l["response_time_ms"] for l in logs_list) / req_count
+            performance_improvement_ms = int(avg_resp * CACHE_HIT_RATE_ASSUMPTION)
             caching_opportunities.append({
                 "endpoint": endpoint,
-                "potential_cache_hit_rate": int(get_count / req_count * 100),
+                "potential_cache_hit_rate": int(get_ratio * 100),
                 "current_requests": req_count,
                 "potential_requests_saved": potential_requests_saved,
                 "estimated_cost_savings_usd": estimated_cost_savings_usd,
-                "recommended_ttl_minutes": 15,
+                "recommended_ttl_minutes": CACHE_RECOMMENDED_TTL_MINUTES,
                 "recommendation_confidence": "high"
             })
             total_requests_saved += potential_requests_saved
@@ -213,10 +265,9 @@ def analyze_api_logs(logs: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     total_potential_savings = {
         "requests_eliminated": total_requests_saved,
-        "cost_savings_usd": total_cost_savings,
+        "cost_savings_usd": round(total_cost_savings, 2),
         "performance_improvement_ms": total_perf_improvement
     }
-
     return {
         "summary": summary,
         "endpoint_stats": endpoint_stats,
