@@ -231,6 +231,47 @@ def test_anomaly_detection():
 
 
 # -------------------------
+# Step 11: Caching Opportunities
+# -------------------------
+def test_caching_opportunities():
+    """Step 11: Test detection of caching opportunities."""
+    logs = []
+    # Generate 120 GET requests with low errors for /api/cache
+    for i in range(120):
+        logs.append({
+            "timestamp": f"2025-01-15T12:{i%60:02}:00Z",
+            "endpoint": "/api/cache",
+            "method": "GET",
+            "response_time_ms": 100,
+            "status_code": 200,
+            "user_id": f"user_{i}",
+            "request_size_bytes": 100,
+            "response_size_bytes": 200
+        })
+    # Some POST requests to mix
+    logs.append({
+        "timestamp": "2025-01-15T13:00:00Z",
+        "endpoint": "/api/cache",
+        "method": "POST",
+        "response_time_ms": 200,
+        "status_code": 200,
+        "user_id": "user_999",
+        "request_size_bytes": 150,
+        "response_size_bytes": 250
+    })
+
+    result = analyze_api_logs(logs)
+    cache_ops = result["caching_opportunities"]
+    total_savings = result["total_potential_savings"]
+
+    assert len(cache_ops) >= 1
+    assert cache_ops[0]["endpoint"] == "/api/cache"
+    assert cache_ops[0]["potential_cache_hit_rate"] >= 80
+    assert total_savings["requests_eliminated"] >= 100
+    assert total_savings["cost_savings_usd"] > 0
+
+
+# -------------------------
 # Run all tests
 # -------------------------
 if __name__ == "__main__":
@@ -254,3 +295,6 @@ if __name__ == "__main__":
 
     test_anomaly_detection()
     print("Step 10 tests passed!")
+
+    test_caching_opportunities()
+    print("Step 11 tests passed!")
